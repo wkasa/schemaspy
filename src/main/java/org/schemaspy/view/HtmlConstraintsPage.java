@@ -56,19 +56,9 @@ public class HtmlConstraintsPage extends HtmlFormatter {
         HashMap<String, Object> scopes = new HashMap<String, Object>();
         scopes.put("constraints", constraints);
         scopes.put("tables", tables);
+        scopes.put("paginationEnabled",database.getConfig().isPaginationEnabled());
 
         MustacheWriter mw = new MustacheWriter( outputDir, scopes, getPathToRoot(), database.getName(), false);
         mw.write("constraint.html", "constraints.html", "constraint.js");
-    }
-
-    @Override
-    protected void writeFooter(LineWriter html) throws IOException {
-        html.writeln("</div>");
-        super.writeFooter(html);
-    }
-
-    @Override
-    protected boolean isConstraintsPage() {
-        return true;
     }
 }

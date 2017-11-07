@@ -5,6 +5,7 @@
 [![Quality Gate](https://sonarqube.com/api/badges/gate?key=org.schemaspy%3Aschemaspy)](https://sonarcloud.io/dashboard?id=org.schemaspy%3Aschemaspy)
 [![Quality Gate](https://sonarqube.com/api/badges/measure?key=org.schemaspy%3Aschemaspy&metric=coverage)](https://sonarcloud.io/dashboard?id=org.schemaspy%3Aschemaspy)
 [![Gitter](https://badges.gitter.im/schemaspy/schemaspy.svg)](https://gitter.im/schemaspy/schemaspy?utm_source=badge&utm_medium=badge&utm_campaign=pr-badge)
+[![Docker Pulls](https://img.shields.io/docker/pulls/schemaspy/schemaspy.svg)](https://hub.docker.com/r/schemaspy/schemaspy/)
 
 > Please support a project by simply putting a Github star. 
 Share this library with friends on Twitter and everywhere else you can.
@@ -45,16 +46,20 @@ If you need more info about how to use or install SchemaSpy please read the last
 
 [![alt tag](http://schemaspy.org/img/example_page.png)](http://schemaspy.org/sample/index.html)
 
-## SchemaSpy v6.0.0 RC1
-[Release Notes](https://github.com/schemaspy/schemaspy/releases/tag/v6.0.0-rc1)
+## SchemaSpy v6.0.0 RC2
+[Release Notes](https://github.com/schemaspy/schemaspy/releases/tag/v6.0.0-rc2)
 
-[Download](https://github.com/schemaspy/schemaspy/releases/download/v6.0.0-rc1/schemaspy-6.0.0-rc1.jar)
+[Download](https://github.com/schemaspy/schemaspy/releases/download/v6.0.0-rc2/schemaspy-6.0.0-rc2.jar)
 
-## Latest Release
+## Latest Build
 
-Because a lot of users is testing merged PR and verify the changes in the project you can download easily latest version of SchemaSpy.
+To verify fixes and new features you can download our latest build.
 
-Download [schemaspy@latest](https://github.com/schemaspy/schemaspy/raw/gh-pages/schemaspy-6.0.0-rc1.jar)
+[schemaspy@latest](https://github.com/schemaspy/schemaspy/raw/gh-pages/schemaspy-6.0.0-rc2.jar)
+
+## Docker  
+
+We publish snapshot and release to [hub.docker.io](https://hub.docker.com/r/schemaspy/schemaspy/)
 
 ## Bugs and Issues
 
@@ -62,6 +67,20 @@ Have a bug or an issue with SchemaSpy? [Open a new issue](https://github.com/sch
 
 ## Contribution
 Are very welcome! And remember, contribution is not only PRs and code, but any help with docs or helping other developers to solve issues are very appreciated! Thanks in advance!
+
+### Build Instructions
+#### Application
+SchemaSpy is built using maven and we utilize the maven wrapper.  
+__Windows__ `mvnw.cmd build`    
+__Linux__ `./mvnw build`  
+The resulting application can be found in `target`
+
+#### Documentation
+You'll need sphinx installed http://www.sphinx-doc.org    
+Navigate into `docs`  
+__Windows__ `make.bat html`  
+__Linux__ `make html`  
+The resulting documentation can be found in `docs/build/html`
 
 ## Maintained
 
