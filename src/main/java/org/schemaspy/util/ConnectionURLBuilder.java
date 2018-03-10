@@ -1,6 +1,8 @@
 /*
+ * Copyright (C) 2004-2011 John Currier
+ * Copyright (C) 2017 Nils Petzaell
+ *
  * This file is a part of the SchemaSpy project (http://schemaspy.org).
- * Copyright (C) 2004, 2005, 2006, 2007, 2008, 2009, 2010, 2011 John Currier
  *
  * SchemaSpy is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
@@ -19,19 +21,25 @@
 package org.schemaspy.util;
 
 import org.schemaspy.Config;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
+import java.lang.invoke.MethodHandles;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Properties;
-import java.util.logging.Logger;
+
 
 /**
  * @author John Currier
+ * @author Nils Petzaell
  */
 public class ConnectionURLBuilder {
+
+    private static final Logger LOGGER = LoggerFactory.getLogger(MethodHandles.lookup().lookupClass());
+
     private final Config config;
     private final Properties dbType;
-    private final Logger logger = Logger.getLogger(getClass().getName());
 
     /**
      * @param config
@@ -48,11 +56,11 @@ public class ConnectionURLBuilder {
         args.addAll(remaining);
 
         String connectionURL = dbType.getProperty("connectionSpec");
-        DbSpecificConfig dbConfig = new DbSpecificConfig(config.getDbType());
+        DbSpecificConfig dbConfig = new DbSpecificConfig(config.getDbType(), config.getDbProperties());
         for (DbSpecificOption option : dbConfig.getOptions()) {
             option.setValue(getParam(args, option));
 
-            logger.fine(option.toString());
+            LOGGER.debug("{}",option.toString());
 
             // replace e.g. <host> with myDbHost
             connectionURL = connectionURL.replaceAll("\\<" + option.getName() + "\\>", option.getValue());
@@ -66,7 +74,7 @@ public class ConnectionURLBuilder {
             }
         }
 
-        logger.config("connectionURL: " + connectionURL);
+        LOGGER.trace("connectionURL: {}", connectionURL);
 
         return connectionURL;
     }

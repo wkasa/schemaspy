@@ -1,6 +1,8 @@
 /*
+ * Copyright (C) 2004-2011 John Currier
+ * Copyright (C) 2017 Nils Petzaell
+ *
  * This file is a part of the SchemaSpy project (http://schemaspy.org).
- * Copyright (C) 2004, 2005, 2006, 2007, 2008, 2009, 2010, 2011 John Currier
  *
  * SchemaSpy is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
@@ -20,36 +22,42 @@ package org.schemaspy;
 
 import org.schemaspy.cli.CommandLineArgumentParser;
 import org.schemaspy.cli.CommandLineArguments;
+import org.schemaspy.db.config.PropertiesResolver;
 import org.schemaspy.model.InvalidConfigurationException;
 import org.schemaspy.util.DbSpecificConfig;
 import org.schemaspy.util.Dot;
 import org.schemaspy.util.PasswordReader;
 import org.schemaspy.view.DefaultSqlFormatter;
 import org.schemaspy.view.SqlFormatter;
-import org.springframework.util.FileCopyUtils;
-import org.springframework.util.StringUtils;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.beans.BeanInfo;
 import java.beans.IntrospectionException;
 import java.beans.Introspector;
 import java.beans.PropertyDescriptor;
 import java.io.*;
+import java.lang.invoke.MethodHandles;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Paths;
 import java.sql.DatabaseMetaData;
 import java.util.*;
 import java.util.Map.Entry;
 import java.util.jar.JarEntry;
 import java.util.jar.JarInputStream;
-import java.util.logging.Level;
-import java.util.logging.Logger;
 import java.util.regex.Pattern;
 import java.util.regex.PatternSyntaxException;
+import java.util.stream.Collectors;
+import java.util.stream.Stream;
 
 /**
  * Configuration of a SchemaSpy run
  *
  * @author John Currier
+ * @author Nils Petzaell
  */
 public final class Config {
     private static Config instance;
@@ -88,9 +96,8 @@ public final class Config {
     private String font;
     private Integer fontSize;
     private String description;
+    private PropertiesResolver propertiesResolver = new PropertiesResolver();
     private Properties dbProperties;
-    private String dbPropertiesLoadedFrom;
-    private Level logLevel;
     private SqlFormatter sqlFormatter;
     private String sqlFormatterClass;
     private Boolean generateHtml;
@@ -120,7 +127,7 @@ public final class Config {
     private static final String DEFAULT_COLUMN_EXCLUSION = "[^.]";  // match nothing
     private static final String DEFAULT_PROPERTIES_FILE = "schemaspy.properties";
     private Properties schemaspyProperties = new Properties();
-    private static final Logger LOGGER = Logger.getLogger(Config.class.getName());
+    private static final Logger LOGGER = LoggerFactory.getLogger(MethodHandles.lookup().lookupClass());
 
     /**
      * Default constructor. Intended for when you want to inject properties
@@ -212,7 +219,7 @@ public final class Config {
      * Return the path to Graphviz (used to find the dot executable to run to
      * generate ER diagrams).<p/>
      * <p>
-     * Returns {@link #getDefaultGraphvizPath()} if a specific Graphviz path
+     * Returns graphiz path or null
      * was not specified.
      *
      * @return
@@ -255,7 +262,6 @@ public final class Config {
         if (templateDirectory == null) {
             templateDirectory = pullParam("-template");
             if (templateDirectory == null) {
-                // default template dir = resources/layout/
                 templateDirectory = "/layout";
             }
         }
@@ -282,10 +288,8 @@ public final class Config {
     }
 
     /**
-     * @deprecated use {@link CommandLineArguments#getDatabaseName()}
-     * @return
+     * @return Name of database as supplied with -db or set during multi schema analysis
      */
-    @Deprecated
     public String getDb() {
         if (db == null)
             db = pullParam("-db");
@@ -334,15 +338,19 @@ public final class Config {
     public Integer getPort() {
         if (port == null) {
             String portAsString = pullParam("-port");
-            if (StringUtils.hasText(portAsString)) {
+            if (hasText(portAsString)) {
                 try {
                     port = Integer.valueOf(portAsString);
                 } catch (NumberFormatException notSpecified) {
-                    LOGGER.log(Level.WARNING, notSpecified.getMessage(), notSpecified);
+                    LOGGER.warn(notSpecified.getMessage(), notSpecified);
                 }
             }
         }
         return port;
+    }
+
+    private boolean hasText(String string) {
+        return Objects.nonNull(string) && !string.trim().isEmpty();
     }
 
     public void setServer(String server) {
@@ -462,7 +470,7 @@ public final class Config {
                 try {
                     max = Integer.parseInt(param);
                 } catch (NumberFormatException e) {
-                    LOGGER.log(Level.WARNING, e.getMessage(), e);
+                    LOGGER.warn(e.getMessage(), e);
                 }
             }
             maxDetailedTables = max;
@@ -485,7 +493,7 @@ public final class Config {
      * @throws FileNotFoundException
      * @throws IOException
      */
-    public void setConnectionPropertiesFile(String propertiesFilename) throws FileNotFoundException, IOException {
+    public void setConnectionPropertiesFile(String propertiesFilename) throws IOException {
         if (userConnectionProperties == null)
             userConnectionProperties = new Properties();
         userConnectionProperties.load(new FileInputStream(propertiesFilename));
@@ -501,11 +509,11 @@ public final class Config {
      * @throws FileNotFoundException
      * @throws IOException
      */
-    public Properties getConnectionProperties() throws FileNotFoundException, IOException {
+    public Properties getConnectionProperties() throws IOException {
         if (userConnectionProperties == null) {
             String props = pullParam("-connprops");
             if (props != null) {
-                if (props.indexOf(ESCAPED_EQUALS) != -1) {
+                if (props.contains(ESCAPED_EQUALS)) {
                     setConnectionProperties(props);
                 } else {
                     setConnectionPropertiesFile(props);
@@ -628,13 +636,13 @@ public final class Config {
                 try {
                     size = Integer.parseInt(param);
                 } catch (NumberFormatException e) {
-                    LOGGER.log(Level.WARNING, e.getMessage(), e);
+                    LOGGER.warn(e.getMessage(), e);
                 }
             }
-            fontSize = Integer.valueOf(size);
+            fontSize = size;
         }
 
-        return fontSize.intValue();
+        return fontSize;
     }
 
     /**
@@ -689,15 +697,9 @@ public final class Config {
      * @throws InvalidConfigurationException if unable to load properties
      * @see #setMaxDbThreads(int)
      */
-    public int getMaxDbThreads() throws InvalidConfigurationException {
+    public int getMaxDbThreads() {
         if (maxDbThreads == null) {
-            Properties properties;
-            try {
-                properties = determineDbProperties(getDbType());
-            } catch (IOException exc) {
-                throw new InvalidConfigurationException("Failed to load properties for " + getDbType() + ": " + exc)
-                        .setParamName("-type");
-            }
+            Properties properties = getDbProperties();
 
             final int defaultMax = 15;  // not scientifically derived
             int max = defaultMax;
@@ -883,7 +885,7 @@ public final class Config {
      * Set the columns to exclude from relationship diagrams where the specified
      * columns aren't directly referenced by the focal table.
      *
-     * @param columnExclusions regular expression of the columns to
+     * @param fullColumnExclusions regular expression of the columns to
      *                         exclude
      */
     public void setIndirectColumnExclusions(String fullColumnExclusions) {
@@ -933,7 +935,9 @@ public final class Config {
             try {
                 tableInclusions = Pattern.compile(strInclusions);
             } catch (PatternSyntaxException badPattern) {
-                throw new InvalidConfigurationException(badPattern).setParamName("-i");
+                throw new InvalidConfigurationException(badPattern)
+                        .setParamName("-i")
+                        .setParamValue(strInclusions);
             }
         }
 
@@ -943,7 +947,7 @@ public final class Config {
     /**
      * Set the tables to exclude as a regular expression
      *
-     * @param tableInclusions
+     * @param tableExclusions
      */
     public void setTableExclusions(String tableExclusions) {
         this.tableExclusions = Pattern.compile(tableExclusions);
@@ -965,7 +969,9 @@ public final class Config {
             try {
                 tableExclusions = Pattern.compile(strExclusions);
             } catch (PatternSyntaxException badPattern) {
-                throw new InvalidConfigurationException(badPattern).setParamName("-I");
+                throw new InvalidConfigurationException(badPattern)
+                        .setParamName("-I")
+                        .setParamValue(strExclusions);
             }
         }
 
@@ -1030,7 +1036,7 @@ public final class Config {
      * @throws InvalidConfigurationException if unable to instantiate an instance
      */
     @SuppressWarnings("unchecked")
-    public SqlFormatter getSqlFormatter() throws InvalidConfigurationException {
+    public SqlFormatter getSqlFormatter() {
         if (sqlFormatter == null) {
             if (sqlFormatterClass == null) {
                 sqlFormatterClass = pullParam("-sqlFormatter");
@@ -1044,7 +1050,7 @@ public final class Config {
                 sqlFormatter = clazz.newInstance();
             } catch (Exception exc) {
                 throw new InvalidConfigurationException("Failed to initialize instance of SQL formatter: ", exc)
-                        .setParamName("-sqlFormatter");
+                        .setParamName("-sqlFormatter").setParamValue(sqlFormatterClass);
             }
         }
 
@@ -1221,57 +1227,6 @@ public final class Config {
     }
 
     /**
-     * Set the level of logging to perform.<p/>
-     * The levels in descending order are:
-     * <ul>
-     * <li><code>severe</code> (highest - least detail)
-     * <li><code>warning</code> (default)
-     * <li><code>info</code>
-     * <li><code>config</code>
-     * <li><code>fine</code>
-     * <li><code>finer</code>
-     * <li><code>finest</code>  (lowest - most detail)
-     * </ul>
-     *
-     * @param logLevel
-     */
-    public void setLogLevel(String logLevel) {
-        if (logLevel == null) {
-            this.logLevel = Level.WARNING;
-            return;
-        }
-
-        Map<String, Level> levels = new LinkedHashMap<>();
-        levels.put("severe", Level.SEVERE);
-        levels.put("warning", Level.WARNING);
-        levels.put("info", Level.INFO);
-        levels.put("config", Level.CONFIG);
-        levels.put("fine", Level.FINE);
-        levels.put("finer", Level.FINER);
-        levels.put("finest", Level.FINEST);
-
-        this.logLevel = levels.get(logLevel.toLowerCase());
-        if (this.logLevel == null) {
-            throw new InvalidConfigurationException("Invalid logLevel: '" + logLevel +
-                    "'. Must be one of: " + levels.keySet());
-        }
-    }
-
-    /**
-     * Returns the level of logging to perform.
-     * See {@link #setLogLevel(String)}.
-     *
-     * @return
-     */
-    public Level getLogLevel() {
-        if (logLevel == null) {
-            setLogLevel(pullParam("-loglevel"));
-        }
-
-        return logLevel;
-    }
-
-    /**
      * Returns <code>true</code> if the options indicate that the user wants
      * to see some help information.
      *
@@ -1304,7 +1259,7 @@ public final class Config {
 
     /**
      * @return
-     * @see #setHasOrphans()
+     * @see #setHasOrphans(boolean)
      */
     public boolean hasOrphans() {
         return hasOrphans;
@@ -1319,7 +1274,7 @@ public final class Config {
 
     /**
      * @return
-     * @see #setHasRoutines()
+     * @see #setHasRoutines(boolean)
      */
     public boolean hasRoutines() {
         return hasRoutines;
@@ -1392,121 +1347,36 @@ public final class Config {
      * @return
      * @throws InvalidConfigurationException
      */
-    public Properties getDbProperties() throws InvalidConfigurationException {
+    public Properties getDbProperties() {
         if (dbProperties == null) {
-            try {
-                dbProperties = determineDbProperties(getDbType());
-            } catch (IOException exc) {
-                throw new InvalidConfigurationException(exc);
-            }
+            dbProperties = propertiesResolver.getDbProperties(getDbType());
         }
-
         return dbProperties;
     }
 
     /**
      * Determines the database properties associated with the specified type.
-     * A call to {@link #setDbProperties(Properties)} is expected after determining
-     * the complete set of properties.
      *
      * @param type
      * @return
      * @throws IOException
      * @throws InvalidConfigurationException if db properties are incorrectly formed
      */
-    public Properties determineDbProperties(String type) throws IOException, InvalidConfigurationException {
-        ResourceBundle bundle = null;
-
-        try {
-            File propertiesFile = new File(type);
-            bundle = new PropertyResourceBundle(new FileInputStream(propertiesFile));
-            dbPropertiesLoadedFrom = propertiesFile.getAbsolutePath();
-        } catch (FileNotFoundException notFoundOnFilesystemWithoutExtension) {
-            try {
-                File propertiesFile = new File(type + ".properties");
-                bundle = new PropertyResourceBundle(new FileInputStream(propertiesFile));
-                dbPropertiesLoadedFrom = propertiesFile.getAbsolutePath();
-            } catch (FileNotFoundException notFoundOnFilesystemWithExtensionTackedOn) {
-                try {
-                    bundle = ResourceBundle.getBundle(type);
-                    dbPropertiesLoadedFrom = "[" + getLoadedFromJar() + "]" + File.separator + type + ".properties";
-                } catch (Exception notInJarWithoutPath) {
-                    try {
-                        String path = TableOrderer.class.getPackage().getName() + ".types." + type;
-                        path = path.replace('.', '/');
-                        bundle = ResourceBundle.getBundle(path);
-                        dbPropertiesLoadedFrom = "[" + getLoadedFromJar() + "]/" + path + ".properties";
-                    } catch (Exception notInJar) {
-                        notInJar.printStackTrace();
-                        notFoundOnFilesystemWithExtensionTackedOn.printStackTrace();
-                        throw notFoundOnFilesystemWithoutExtension;
-                    }
-                }
-            }
-        }
-
-        Properties props = asProperties(bundle);
-        bundle = null;
-        String saveLoadedFrom = dbPropertiesLoadedFrom; // keep original thru recursion
-
-        // bring in key/values pointed to by the include directive
-        // example: include.1=mysql::selectRowCountSql
-        for (int i = 1; true; ++i) {
-            String include = (String) props.remove("include." + i);
-            if (include == null)
-                break;
-
-            int separator = include.indexOf("::");
-            if (separator == -1)
-                throw new InvalidConfigurationException("include directive in " + dbPropertiesLoadedFrom + " must have '::' between dbType and key");
-
-            String refdType = include.substring(0, separator).trim();
-            String refdKey = include.substring(separator + 2).trim();
-
-            // recursively resolve the ref'd properties file and the ref'd key
-            Properties refdProps = determineDbProperties(refdType);
-            props.put(refdKey, refdProps.getProperty(refdKey));
-        }
-
-        // bring in base properties files pointed to by the extends directive
-        String baseDbType = (String) props.remove("extends");
-        if (baseDbType != null) {
-            baseDbType = baseDbType.trim();
-            Properties baseProps = determineDbProperties(baseDbType);
-
-            // overlay our properties on top of the base's
-            baseProps.putAll(props);
-            props = baseProps;
-        }
-
-        // done with this level of recursion...restore original
-        dbPropertiesLoadedFrom = saveLoadedFrom;
-
-        // this won't be correct until the final recursion exits
-        dbProperties = props;
-
-        return props;
-    }
-
-    protected String getDbPropertiesLoadedFrom() throws IOException {
-        if (dbPropertiesLoadedFrom == null)
-            determineDbProperties(getDbType());
-        return dbPropertiesLoadedFrom;
+    public Properties determineDbProperties(String type) {
+        return propertiesResolver.getDbProperties(type);
     }
 
     public List<String> getRemainingParameters() {
         try {
             populate();
-        } catch (IllegalArgumentException exc) {
-            throw new InvalidConfigurationException(exc);
-        } catch (IllegalAccessException exc) {
+        } catch (IllegalArgumentException |
+                 IllegalAccessException |
+                 IntrospectionException exc) {
             throw new InvalidConfigurationException(exc);
         } catch (InvocationTargetException exc) {
             if (exc.getCause() instanceof InvalidConfigurationException)
                 throw (InvalidConfigurationException) exc.getCause();
             throw new InvalidConfigurationException(exc.getCause());
-        } catch (IntrospectionException exc) {
-            throw new InvalidConfigurationException(exc);
         }
 
         return options;
@@ -1527,23 +1397,6 @@ public final class Config {
         if (dbSpecificOptions == null)
             dbSpecificOptions = new HashMap<>();
         return dbSpecificOptions;
-    }
-
-    /**
-     * Returns a {@link Properties} populated with the contents of <code>bundle</code>
-     *
-     * @param bundle ResourceBundle
-     * @return Properties
-     */
-    public static Properties asProperties(ResourceBundle bundle) {
-        Properties props = new Properties();
-        Enumeration<String> iter = bundle.getKeys();
-        while (iter.hasMoreElements()) {
-            String key = iter.nextElement();
-            props.put(key, bundle.getObject(key));
-        }
-
-        return props;
     }
 
     /**
@@ -1568,8 +1421,7 @@ public final class Config {
      * @return
      * @throws MissingRequiredParameterException
      */
-    private String pullParam(String paramId, boolean required, boolean dbTypeSpecific)
-            throws MissingRequiredParameterException {
+    private String pullParam(String paramId, boolean required, boolean dbTypeSpecific) {
         int paramIndex = options.indexOf(paramId);
         if (paramIndex < 0) {
             if (required)
@@ -1577,7 +1429,7 @@ public final class Config {
             return null;
         }
         options.remove(paramIndex);
-        String param = options.get(paramIndex).toString();
+        String param = options.get(paramIndex);
         options.remove(paramIndex);
         return param;
     }
@@ -1651,13 +1503,13 @@ public final class Config {
     }
 
     private void loadProperties(String path) {
-        File configFile = new File(path);
-        String contents;
-        try (FileInputStream fileInputStream = new FileInputStream(configFile)) {
-            contents = FileCopyUtils.copyToString(new InputStreamReader(fileInputStream, "UTF-8"));
-            this.schemaspyProperties.load(new StringReader(contents.replace("\\", "\\\\")));
+        try (Stream<String> lineStream = Files.lines(Paths.get(path))) {
+            String content = lineStream
+                    .map(l -> l.replace("\\", "\\\\"))
+                    .collect(Collectors.joining(System.lineSeparator()));
+            this.schemaspyProperties.load(new StringReader(content));
         } catch (IOException e) {
-            LOGGER.log(Level.INFO, "Configuration file not found");
+            LOGGER.info("Configuration file not found");
         }
     }
 
@@ -1669,14 +1521,14 @@ public final class Config {
      * @throws IllegalArgumentException
      * @throws IntrospectionException
      */
-    private void populate() throws IllegalArgumentException, IllegalAccessException, InvocationTargetException, IntrospectionException {
+    private void populate() throws IllegalAccessException, InvocationTargetException, IntrospectionException {
         if (!populating) { // prevent recursion
             populating = true;
 
             BeanInfo beanInfo = Introspector.getBeanInfo(Config.class);
             PropertyDescriptor[] props = beanInfo.getPropertyDescriptors();
-            for (int i = 0; i < props.length; ++i) {
-                Method readMethod = props[i].getReadMethod();
+            for (PropertyDescriptor prop : props) {
+                Method readMethod = prop.getReadMethod();
                 if (readMethod != null)
                     readMethod.invoke(this, (Object[]) null);
             }
@@ -1687,28 +1539,19 @@ public final class Config {
 
     public static Set<String> getBuiltInDatabaseTypes(String loadedFromJar) {
         Set<String> databaseTypes = new TreeSet<>();
-        JarInputStream jar = null;
-
-        try {
-            jar = new JarInputStream(new FileInputStream(loadedFromJar));
+        try (JarInputStream jar = new JarInputStream(new FileInputStream(loadedFromJar))){
             JarEntry entry;
 
             while ((entry = jar.getNextJarEntry()) != null) {
                 String entryName = entry.getName();
-                if (entryName.indexOf("types") != -1) {
+                if (entryName.contains("types")) {
                     int dotPropsIndex = entryName.indexOf(".properties");
                     if (dotPropsIndex != -1)
                         databaseTypes.add(entryName.substring(0, dotPropsIndex));
                 }
             }
         } catch (IOException exc) {
-        } finally {
-            if (jar != null) {
-                try {
-                    jar.close();
-                } catch (IOException ignore) {
-                }
-            }
+            LOGGER.error("Failed to read bundled DatabaseTypes", exc);
         }
 
         return databaseTypes;
@@ -1778,15 +1621,14 @@ public final class Config {
         try {
             BeanInfo beanInfo = Introspector.getBeanInfo(Config.class);
             PropertyDescriptor[] props = beanInfo.getPropertyDescriptors();
-            for (int i = 0; i < props.length; ++i) {
-                PropertyDescriptor prop = props[i];
+            for (PropertyDescriptor prop : props) {
                 if (prop.getName().equalsIgnoreCase(paramName)) {
                     Object result = prop.getReadMethod().invoke(this, (Object[]) null);
                     return result == null ? null : result.toString();
                 }
             }
         } catch (Exception failed) {
-            failed.printStackTrace();
+            LOGGER.error("Unable to get parameter {}",paramName,failed);
         }
 
         return null;
@@ -1803,8 +1645,9 @@ public final class Config {
         List<String> params = new ArrayList<>();
 
         if (originalDbSpecificOptions != null) {
-            for (String key : originalDbSpecificOptions.keySet()) {
-                String value = originalDbSpecificOptions.get(key);
+            for (Entry<String,String> entry : originalDbSpecificOptions.entrySet()) {
+                String key = entry.getKey();
+                String value = entry.getValue();
                 if (!key.startsWith("-"))
                     key = "-" + key;
                 params.add(key);
@@ -1936,8 +1779,7 @@ public final class Config {
             params.add("-gv");
             params.add(getGraphvizDir().toString());
         }
-        params.add("-loglevel");
-        params.add(getLogLevel().toString().toLowerCase());
+
         params.add("-sqlFormatter");
         params.add(getSqlFormatter().getClass().getName());
         params.add("-i");

@@ -1,39 +1,25 @@
 package org.schemaspy.service;
 
 import org.schemaspy.Config;
-import org.schemaspy.model.Database;
-import org.schemaspy.model.LogicalTable;
-import org.schemaspy.model.ProgressListener;
-import org.schemaspy.model.Routine;
-import org.schemaspy.model.RoutineParameter;
-import org.schemaspy.model.Table;
-import org.schemaspy.model.TableColumn;
-import org.schemaspy.model.TableIndex;
-import org.schemaspy.model.View;
+import org.schemaspy.model.*;
 import org.schemaspy.model.xml.SchemaMeta;
 import org.schemaspy.model.xml.TableMeta;
 import org.schemaspy.service.helper.BasicTableMeta;
 import org.schemaspy.validator.NameValidator;
-import org.springframework.stereotype.Service;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
+import java.lang.invoke.MethodHandles;
 import java.sql.DatabaseMetaData;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
-import java.util.ArrayList;
-import java.util.HashSet;
-import java.util.Iterator;
-import java.util.List;
-import java.util.Objects;
-import java.util.Set;
-import java.util.logging.Level;
-import java.util.logging.Logger;
+import java.util.*;
 import java.util.regex.Pattern;
 
 /**
  * Created by rkasa on 2016-12-10.
  */
-@Service
 public class DatabaseService {
 
     private final TableService tableService;
@@ -42,8 +28,7 @@ public class DatabaseService {
 
     private final SqlService sqlService;
 
-    private final Logger logger = Logger.getLogger(getClass().getName());
-    private final boolean fineEnabled = logger.isLoggable(Level.FINE);
+    private final Logger LOGGER = LoggerFactory.getLogger(MethodHandles.lookup().lookupClass());
 
     public DatabaseService(TableService tableService, ViewService viewService, SqlService sqlService) {
         this.tableService = Objects.requireNonNull(tableService);
@@ -52,7 +37,7 @@ public class DatabaseService {
     }
 
     public void gatheringSchemaDetails(Config config, Database db, ProgressListener listener) throws SQLException {
-        logger.info("Gathering schema details");
+        LOGGER.info("Gathering schema details");
 
         listener.startedGatheringDetails();
 
@@ -62,8 +47,8 @@ public class DatabaseService {
         if (config.isViewsEnabled())
             initViews(config, db, listener, meta);
         
-        initCatalogs(config, db, listener);
-        initSchemas(config, db, listener);
+        initCatalogs(db);
+        initSchemas(db);
 
         initCheckConstraints(config, db, listener);
         initTableIds(config, db);
@@ -81,45 +66,36 @@ public class DatabaseService {
         updateFromXmlMetadata(config, db, db.getSchemaMeta());
     }
     
-   private void initCatalogs(Config config, Database db, ProgressListener listener) throws SQLException {
+   private void initCatalogs(Database db) throws SQLException {
 
             String sql = Config.getInstance().getDbProperties().getProperty("selectCatalogsSql");
-            PreparedStatement stmt = null;
-			ResultSet rs =  null;
+
             if (sql != null && db.getCatalog() != null) {
-                try {
-                stmt = sqlService.prepareStatement(sql,db,null);
-                rs = stmt.executeQuery();
-                    while (rs.next()) {
+                try (PreparedStatement stmt = sqlService.prepareStatement(sql, db, null);
+                     ResultSet rs = stmt.executeQuery()) {
+                    if (rs.next()) {
                          db.getCatalog().setComment(rs.getString("catalog_comment"));
-                         break;
                     }
                 } catch (SQLException sqlException) {
-                    //db.getSchema().setComment(null);
-                } finally {// 
-                    stmt.close();
-                  	rs.close();
+                    LOGGER.error(sql);
+                    throw sqlException;
                 }
             }
     }
 
-    private void initSchemas(Config config, Database db, ProgressListener listener) throws SQLException {
+    private void initSchemas(Database db) throws SQLException {
     	  String sql = Config.getInstance().getDbProperties().getProperty("selectSchemasSql");
-          PreparedStatement stmt = null;
-			ResultSet rs =  null;
+
           if (sql != null &&  db.getSchema() != null) {
-              try {
-              stmt = sqlService.prepareStatement(sql,db,null);
-              rs = stmt.executeQuery();
-                  while (rs.next()) {
+              try (PreparedStatement stmt = sqlService.prepareStatement(sql, db, null);
+                   ResultSet rs = stmt.executeQuery()) {
+
+                  if (rs.next()) {
                        db.getSchema().setComment(rs.getString("schema_comment"));
-                       break;
                   }
               } catch (SQLException sqlException) {
-                  //db.getSchema().setComment(null);
-              } finally {
-                stmt.close();
-              	rs.close();
+                  LOGGER.error(sql);
+                  throw sqlException;
               }
           }
     }
@@ -188,20 +164,18 @@ public class DatabaseService {
         for (BasicTableMeta entry : getBasicTableMeta(config, db, listener, metadata, false, types)) {
             if (validator.isValid(entry.getName(), entry.getType())) {
                 View view = new View(db, entry.getCatalog(), entry.getSchema(), entry.getName(),
-                        entry.getRemarks(), entry.getViewSql());
+                        entry.getRemarks(), entry.getViewDefinition());
 
                 tableService.gatheringTableDetails(db, view);
 
-                if (entry.getViewSql() == null) {
-                    view.setViewSql(viewService.fetchViewSql(db, view));
+                if (entry.getViewDefinition() == null) {
+                    view.setViewDefinition(viewService.fetchViewDefinition(db, view));
                 }
 
                 db.getViewsMap().put(view.getName(), view);
                 listener.gatheringDetailsProgressed(view);
 
-                if (fineEnabled) {
-                    logger.fine("Found details of view " + view.getName());
-                }
+                LOGGER.debug("Found details of view {}", view.getName());
             }
         }
     }
@@ -216,7 +190,7 @@ public class DatabaseService {
      */
     private String[] getTypes(Config config, String propName, String defaultValue) {
         String value = config.getDbProperties().getProperty(propName, defaultValue);
-        List<String> types = new ArrayList<String>();
+        List<String> types = new ArrayList<>();
         for (String type : value.split(",")) {
             type = type.trim();
             if (type.length() > 0)
@@ -234,7 +208,9 @@ public class DatabaseService {
      */
     private void updateFromXmlMetadata(Config config, Database db, SchemaMeta schemaMeta) throws SQLException {
         if (schemaMeta != null) {
-            config.setDescription(schemaMeta.getComments());
+            if (Objects.nonNull(schemaMeta.getComments())) {
+                config.setDescription(schemaMeta.getComments());
+            }
 
             // done in three passes:
             // 1: create any new tables
@@ -320,9 +296,7 @@ public class DatabaseService {
 
             listener.gatheringDetailsProgressed(table);
 
-            if (logger.isLoggable(Level.FINE)) {
-                logger.fine("Retrieved details of " + table.getFullName());
-            }
+            LOGGER.debug("Retrieved details of {}", table.getFullName());
         }
 
         /**
@@ -337,7 +311,7 @@ public class DatabaseService {
      * Multi-threaded implementation of a class that creates tables
      */
     private class ThreadedTableCreator extends TableCreator {
-        private final Set<Thread> threads = new HashSet<Thread>();
+        private final Set<Thread> threads = new HashSet<>();
         private final int maxThreads;
 
         ThreadedTableCreator(int maxThreads) {
@@ -345,14 +319,14 @@ public class DatabaseService {
         }
 
         @Override
-        void create(Database db, BasicTableMeta tableMeta, ProgressListener listener) throws SQLException {
+        void create(Database db, BasicTableMeta tableMeta, ProgressListener listener) {
             Thread runner = new Thread() {
                 @Override
                 public void run() {
                     try {
                         createImpl(db, tableMeta, listener);
                     } catch (SQLException exc) {
-                        exc.printStackTrace(); // nobody above us in call stack...dump it here
+                        LOGGER.error("SQL exception",exc);
                     } finally {
                         synchronized (threads) {
                             threads.remove(this);
@@ -417,16 +391,15 @@ public class DatabaseService {
                                                    String... types) throws SQLException {
         String queryName = forTables ? "selectTablesSql" : "selectViewsSql";
         String sql = config.getDbProperties().getProperty(queryName);
-        List<BasicTableMeta> basics = new ArrayList<BasicTableMeta>();
-        ResultSet rs = null;
+        List<BasicTableMeta> basics = new ArrayList<>();
+
 
         if (sql != null) {
             String clazz = forTables ? "table" : "view";
-            PreparedStatement stmt = null;
 
-            try {
-                stmt = sqlService.prepareStatement(sql,db, null);
-                rs = stmt.executeQuery();
+
+            try (PreparedStatement stmt = sqlService.prepareStatement(sql, db, null);
+                 ResultSet rs = stmt.executeQuery()) {
 
                 while (rs.next()) {
                     String name = rs.getString(clazz + "_name");
@@ -435,32 +408,27 @@ public class DatabaseService {
                     if (cat == null && sch == null)
                         sch = db.getSchema().getName();
                     String remarks = getOptionalString(rs, clazz + "_comment");
-                    String text = forTables ? null : getOptionalString(rs, "view_definition");
+                    String viewDefinition = forTables ? null : getOptionalString(rs, "view_definition");
                     String rows = forTables ? getOptionalString(rs, "table_rows") : null;
                     long numRows = rows == null ? -1 : Long.parseLong(rows);
 
-                    basics.add(new BasicTableMeta(cat, sch, name, clazz, remarks, text, numRows));
+                    basics.add(new BasicTableMeta(cat, sch, name, clazz, remarks, viewDefinition, numRows));
                 }
             } catch (SQLException sqlException) {
                 // don't die just because this failed
                 String msg = listener.recoverableExceptionEncountered("Failed to retrieve " + clazz + " names with custom SQL", sqlException, sql);
                 if (msg != null) {
-                    logger.warning(msg);
+                    LOGGER.warn(msg);
                 }
-            } finally {
-                if (rs != null)
-                    rs.close();
-                if (stmt != null)
-                    stmt.close();
             }
         }
 
         if (basics.isEmpty()) {
-            rs = metadata.getTables(null, db.getSchema().getName(), "%", types);
-
-            try {
+            String lastTableName = null;
+            try (ResultSet rs = metadata.getTables(null, db.getSchema().getName(), "%", types)){
                 while (rs.next()) {
                     String name = rs.getString("TABLE_NAME");
+                    lastTableName = name;
                     String type = rs.getString("TABLE_TYPE");
                     String cat = rs.getString("TABLE_CAT");
                     String schem = rs.getString("TABLE_SCHEM");
@@ -474,12 +442,9 @@ public class DatabaseService {
 
                 System.out.flush();
                 System.err.println();
-                System.err.println("Ignoring view " + rs.getString("TABLE_NAME") + " due to exception:");
+                System.err.println("Ignoring view " + lastTableName + " due to exception:");
                 exc.printStackTrace();
                 System.err.println("Continuing analysis.");
-            } finally {
-                if (rs != null)
-                    rs.close();
             }
         }
 
@@ -491,7 +456,7 @@ public class DatabaseService {
      * E.g. Oracle doesn't have a REMARKS column at all.
      * This method ignores those types of failures, replacing them with null.
      */
-    public String getOptionalString(ResultSet rs, String columnName)
+    private String getOptionalString(ResultSet rs, String columnName)
     {
         try {
             return rs.getString(columnName);
@@ -500,15 +465,11 @@ public class DatabaseService {
         }
     }
 
-    private void initCheckConstraints(Config config, Database db, ProgressListener listener) throws SQLException {
+    private void initCheckConstraints(Config config, Database db, ProgressListener listener) {
         String sql = config.getDbProperties().getProperty("selectCheckConstraintsSql");
         if (sql != null) {
-            PreparedStatement stmt = null;
-            ResultSet rs = null;
-
-            try {
-                stmt = sqlService.prepareStatement(sql, db,null);
-                rs = stmt.executeQuery();
+            try (PreparedStatement stmt = sqlService.prepareStatement(sql, db,null);
+                 ResultSet rs = stmt.executeQuery()) {
 
                 while (rs.next()) {
                     String tableName = rs.getString("table_name");
@@ -520,26 +481,18 @@ public class DatabaseService {
                 // don't die just because this failed
                 String msg = listener.recoverableExceptionEncountered("Failed to retrieve check constraints", sqlException, sql);
                 if (msg != null) {
-                    logger.warning(msg);
+                    LOGGER.warn(msg);
                 }
-            } finally {
-                if (rs != null)
-                    rs.close();
-                if (stmt != null)
-                    stmt.close();
             }
         }
     }
 
-    private void initColumnTypes(Config config, Database db, ProgressListener listener) throws SQLException {
+    private void initColumnTypes(Config config, Database db, ProgressListener listener) {
         String sql = config.getDbProperties().getProperty("selectColumnTypesSql");
         if (sql != null) {
-            PreparedStatement stmt = null;
-            ResultSet rs = null;
 
-            try {
-                stmt = sqlService.prepareStatement(sql,db, null);
-                rs = stmt.executeQuery();
+            try (PreparedStatement stmt = sqlService.prepareStatement(sql, db, null);
+                 ResultSet rs = stmt.executeQuery()) {
 
                 while (rs.next()) {
                     String tableName = rs.getString("table_name");
@@ -557,13 +510,8 @@ public class DatabaseService {
                 // don't die just because this failed
                 String msg = listener.recoverableExceptionEncountered("Failed to retrieve column type details", sqlException, sql);
                 if (msg != null) {
-                    logger.warning(msg);
+                    LOGGER.warn(msg);
                 }
-            } finally {
-                if (rs != null)
-                    rs.close();
-                if (stmt != null)
-                    stmt.close();
             }
         }
     }
@@ -571,12 +519,9 @@ public class DatabaseService {
     private void initTableIds(Config config, Database db) throws SQLException {
         String sql = config.getDbProperties().getProperty("selectTableIdsSql");
         if (sql != null) {
-            PreparedStatement stmt = null;
-            ResultSet rs = null;
 
-            try {
-                stmt = sqlService.prepareStatement(sql,db, null);
-                rs = stmt.executeQuery();
+            try (PreparedStatement stmt = sqlService.prepareStatement(sql, db, null);
+                 ResultSet rs = stmt.executeQuery()) {
 
                 while (rs.next()) {
                     String tableName = rs.getString("table_name");
@@ -588,11 +533,6 @@ public class DatabaseService {
                 System.err.println();
                 System.err.println(sql);
                 throw sqlException;
-            } finally {
-                if (rs != null)
-                    rs.close();
-                if (stmt != null)
-                    stmt.close();
             }
         }
     }
@@ -600,12 +540,9 @@ public class DatabaseService {
     private void initIndexIds(Config config, Database db) throws SQLException {
         String sql = config.getDbProperties().getProperty("selectIndexIdsSql");
         if (sql != null) {
-            PreparedStatement stmt = null;
-            ResultSet rs = null;
 
-            try {
-                stmt = sqlService.prepareStatement(sql,db, null);
-                rs = stmt.executeQuery();
+            try (PreparedStatement stmt = sqlService.prepareStatement(sql, db, null);
+                 ResultSet rs = stmt.executeQuery()) {
 
                 while (rs.next()) {
                     String tableName = rs.getString("table_name");
@@ -620,11 +557,6 @@ public class DatabaseService {
                 System.err.println();
                 System.err.println(sql);
                 throw sqlException;
-            } finally {
-                if (rs != null)
-                    rs.close();
-                if (stmt != null)
-                    stmt.close();
             }
         }
     }
@@ -636,15 +568,12 @@ public class DatabaseService {
      *
      * @throws SQLException
      */
-    private void initTableComments(Config config, Database db, ProgressListener listener) throws SQLException {
+    private void initTableComments(Config config, Database db, ProgressListener listener) {
         String sql = config.getDbProperties().getProperty("selectTableCommentsSql");
         if (sql != null) {
-            PreparedStatement stmt = null;
-            ResultSet rs = null;
 
-            try {
-                stmt = sqlService.prepareStatement(sql,db, null);
-                rs = stmt.executeQuery();
+            try (PreparedStatement stmt = sqlService.prepareStatement(sql, db, null);
+                 ResultSet rs = stmt.executeQuery()) {
 
                 while (rs.next()) {
                     String tableName = rs.getString("table_name");
@@ -656,13 +585,8 @@ public class DatabaseService {
                 // don't die just because this failed
                 String msg = listener.recoverableExceptionEncountered("Failed to retrieve table/view comments", sqlException, sql);
                 if (msg != null) {
-                    logger.warning(msg);
+                    LOGGER.warn(msg);
                 }
-            } finally {
-                if (rs != null)
-                    rs.close();
-                if (stmt != null)
-                    stmt.close();
             }
         }
     }
@@ -672,15 +596,12 @@ public class DatabaseService {
      *
      * @throws SQLException
      */
-    private void initViewComments(Config config, Database db, ProgressListener listener) throws SQLException {
+    private void initViewComments(Config config, Database db, ProgressListener listener) {
         String sql = config.getDbProperties().getProperty("selectViewCommentsSql");
         if (sql != null) {
-            PreparedStatement stmt = null;
-            ResultSet rs = null;
 
-            try {
-                stmt = sqlService.prepareStatement(sql,db, null);
-                rs = stmt.executeQuery();
+            try (PreparedStatement stmt = sqlService.prepareStatement(sql, db, null);
+                 ResultSet rs = stmt.executeQuery()) {
 
                 while (rs.next()) {
                     String viewName = rs.getString("view_name");
@@ -695,13 +616,8 @@ public class DatabaseService {
                 // don't die just because this failed
                 String msg = listener.recoverableExceptionEncountered("Failed to retrieve table/view comments", sqlException, sql);
                 if (msg != null) {
-                    logger.warning(msg);
+                    LOGGER.warn(msg);
                 }
-            } finally {
-                if (rs != null)
-                    rs.close();
-                if (stmt != null)
-                    stmt.close();
             }
         }
     }
@@ -713,15 +629,12 @@ public class DatabaseService {
      *
      * @throws SQLException
      */
-    private void initTableColumnComments(Config config, Database db, ProgressListener listener) throws SQLException {
+    private void initTableColumnComments(Config config, Database db, ProgressListener listener) {
         String sql = config.getDbProperties().getProperty("selectColumnCommentsSql");
         if (sql != null) {
-            PreparedStatement stmt = null;
-            ResultSet rs = null;
 
-            try {
-                stmt = sqlService.prepareStatement(sql,db, null);
-                rs = stmt.executeQuery();
+            try (PreparedStatement stmt = sqlService.prepareStatement(sql, db, null);
+                 ResultSet rs = stmt.executeQuery()) {
 
                 while (rs.next()) {
                     String tableName = rs.getString("table_name");
@@ -736,13 +649,8 @@ public class DatabaseService {
                 // don't die just because this failed
                 String msg = listener.recoverableExceptionEncountered("Failed to retrieve column comments", sqlException, sql);
                 if (msg != null) {
-                    logger.warning(msg);
+                    LOGGER.warn(msg);
                 }
-            } finally {
-                if (rs != null)
-                    rs.close();
-                if (stmt != null)
-                    stmt.close();
             }
         }
     }
@@ -752,15 +660,12 @@ public class DatabaseService {
      *
      * @throws SQLException
      */
-    private void initViewColumnComments(Config config, Database db, ProgressListener listener) throws SQLException {
+    private void initViewColumnComments(Config config, Database db, ProgressListener listener) {
         String sql = config.getDbProperties().getProperty("selectViewColumnCommentsSql");
         if (sql != null) {
-            PreparedStatement stmt = null;
-            ResultSet rs = null;
 
-            try {
-                stmt = sqlService.prepareStatement(sql,db, null);
-                rs = stmt.executeQuery();
+            try (PreparedStatement stmt = sqlService.prepareStatement(sql, db, null);
+                 ResultSet rs = stmt.executeQuery()) {
 
                 while (rs.next()) {
                     String viewName = rs.getString("view_name");
@@ -778,13 +683,8 @@ public class DatabaseService {
                 // don't die just because this failed
                 String msg = listener.recoverableExceptionEncountered("Failed to retrieve view column comments", sqlException, sql);
                 if (msg != null) {
-                    logger.warning(msg);
+                    LOGGER.warn(msg);
                 }
-            } finally {
-                if (rs != null)
-                    rs.close();
-                if (stmt != null)
-                    stmt.close();
             }
         }
     }
@@ -794,16 +694,13 @@ public class DatabaseService {
      *
      * @throws SQLException
      */
-    private void initRoutines(Config config, Database db, ProgressListener listener) throws SQLException {
+    private void initRoutines(Config config, Database db, ProgressListener listener) {
         String sql = config.getDbProperties().getProperty("selectRoutinesSql");
 
         if (sql != null) {
-            PreparedStatement stmt = null;
-            ResultSet rs = null;
 
-            try {
-                stmt = sqlService.prepareStatement(sql,db, null);
-                rs = stmt.executeQuery();
+            try (PreparedStatement stmt = sqlService.prepareStatement(sql, db, null);
+                 ResultSet rs = stmt.executeQuery()) {
 
                 while (rs.next()) {
                     String routineName = rs.getString("routine_name");
@@ -825,27 +722,17 @@ public class DatabaseService {
                 // don't die just because this failed
                 String msg = listener.recoverableExceptionEncountered("Failed to retrieve stored procedure/function details", sqlException, sql);
                 if (msg != null) {
-                    logger.warning(msg);
+                    LOGGER.warn(msg);
                 }
-            } finally {
-                if (rs != null)
-                    rs.close();
-                if (stmt != null)
-                    stmt.close();
-                rs = null;
-                stmt = null;
             }
         }
 
         sql = config.getDbProperties().getProperty("selectRoutineParametersSql");
 
         if (sql != null) {
-            PreparedStatement stmt = null;
-            ResultSet rs = null;
 
-            try {
-                stmt = sqlService.prepareStatement(sql,db, null);
-                rs = stmt.executeQuery();
+            try (PreparedStatement stmt = sqlService.prepareStatement(sql, db, null);
+                 ResultSet rs = stmt.executeQuery()) {
 
                 while (rs.next()) {
                     String routineName = rs.getString("specific_name");
@@ -865,13 +752,8 @@ public class DatabaseService {
                 // don't die just because this failed
                 String msg = listener.recoverableExceptionEncountered("Failed to retrieve stored procedure/function details", sqlException, sql);
                 if (msg != null) {
-                    logger.warning(msg);
+                    LOGGER.warn(msg);
                 }
-            } finally {
-                if (rs != null)
-                    rs.close();
-                if (stmt != null)
-                    stmt.close();
             }
         }
     }

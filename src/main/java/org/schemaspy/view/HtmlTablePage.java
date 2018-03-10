@@ -27,6 +27,7 @@ import org.schemaspy.util.Markdown;
 
 import java.io.File;
 import java.io.IOException;
+import java.nio.file.Files;
 import java.util.*;
 
 /**
@@ -104,15 +105,15 @@ public class HtmlTablePage extends HtmlFormatter {
     private Set<Table> sqlReferences(Table table, Database db) {
         Set<Table> references = null;
 
-        if (table.isView() && table.getViewSql() != null) {
+        if (table.isView() && table.getViewDefinition() != null) {
             DefaultSqlFormatter formatter = new DefaultSqlFormatter();
-            references = formatter.getReferencedTables(table.getViewSql(), db);
+            references = formatter.getReferencedTables(table.getViewDefinition(), db);
         }
         return references;
     }
 
     private String sqlCode(Table table) {
-        return table.getViewSql() != null ? table.getViewSql().trim() : "";
+        return table.getViewDefinition() != null ? table.getViewDefinition().trim() : "";
     }
 
     private Object indexExists(Table table, Set<MustacheTableIndex> indexedColumns) {
@@ -125,7 +126,7 @@ public class HtmlTablePage extends HtmlFormatter {
 
     private Object definitionExists(Table table) {
         Object exists = null;
-        if (table.isView() && table.getViewSql() != null) {
+        if (table.isView() && table.getViewDefinition() != null) {
             exists = new Object();
         }
         return exists;
@@ -140,7 +141,7 @@ public class HtmlTablePage extends HtmlFormatter {
      * two degrees of separation.
      *
      * @param table       Table
-     * @param diagramsDir File
+     * @param diagramDir File
      * @return boolean <code>true</code> if the table has implied relatives within two
      * degrees of separation.
      * @throws IOException
@@ -160,14 +161,14 @@ public class HtmlTablePage extends HtmlFormatter {
 
         // delete before we start because we'll use the existence of these files to determine
         // if they should be turned into pngs & presented
-        oneDegreeDotFile.delete();
-        oneDegreeDiagramFile.delete();
-        twoDegreesDotFile.delete();
-        twoDegreesDiagramFile.delete();
-        oneImpliedDotFile.delete();
-        oneImpliedDiagramFile.delete();
-        twoImpliedDotFile.delete();
-        twoImpliedDiagramFile.delete();
+        Files.deleteIfExists(oneDegreeDotFile.toPath());
+        Files.deleteIfExists(oneDegreeDiagramFile.toPath());
+        Files.deleteIfExists(twoDegreesDotFile.toPath());
+        Files.deleteIfExists(twoDegreesDiagramFile.toPath());
+        Files.deleteIfExists(oneImpliedDotFile.toPath());
+        Files.deleteIfExists(oneImpliedDiagramFile.toPath());
+        Files.deleteIfExists(twoImpliedDotFile.toPath());
+        Files.deleteIfExists(twoImpliedDiagramFile.toPath());
 
 
         if (table.getMaxChildren() + table.getMaxParents() > 0) {
@@ -185,7 +186,7 @@ public class HtmlTablePage extends HtmlFormatter {
             dotOut.close();
 
             if (oneStats.getNumTablesWritten() + oneStats.getNumViewsWritten() == twoStats.getNumTablesWritten() + twoStats.getNumViewsWritten()) {
-                twoDegreesDotFile.delete(); // no different than before, so don't show it
+                Files.deleteIfExists(twoDegreesDotFile.toPath()); // no different than before, so don't show it
             }
 
             if (!impliedConstraints.isEmpty()) {

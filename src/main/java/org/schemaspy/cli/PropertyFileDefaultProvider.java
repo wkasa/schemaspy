@@ -1,16 +1,16 @@
 package org.schemaspy.cli;
 
 import com.beust.jcommander.IDefaultProvider;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.util.FileCopyUtils;
 
-import java.io.FileInputStream;
-import java.io.IOException;
-import java.io.InputStreamReader;
-import java.io.StringReader;
+import java.io.*;
+import java.lang.invoke.MethodHandles;
+import java.util.Arrays;
+import java.util.List;
 import java.util.Objects;
 import java.util.Properties;
-import java.util.logging.Level;
-import java.util.logging.Logger;
 
 /**
  * Implementation of {@link IDefaultProvider} that provides values reading from a {@link Properties} file.
@@ -21,9 +21,11 @@ import java.util.logging.Logger;
  */
 public class PropertyFileDefaultProvider implements IDefaultProvider {
 
-    private static final Logger LOGGER = Logger.getLogger(PropertyFileDefaultProvider.class.getName());
+    private static final Logger LOGGER = LoggerFactory.getLogger(MethodHandles.lookup().lookupClass());
 
     private final Properties properties;
+
+    private final List<String> booleans = Arrays.asList("schemaspy.sso","schemaspy.debug");
 
     public PropertyFileDefaultProvider(String propertiesFilename) {
         Objects.requireNonNull(propertiesFilename);
@@ -31,22 +33,25 @@ public class PropertyFileDefaultProvider implements IDefaultProvider {
     }
 
     private static Properties loadProperties(String path) {
-        try {
-            FileInputStream inputStream = new FileInputStream(path);
+        try (Reader reader = new InputStreamReader(new FileInputStream(path), "UTF-8")){
             Properties properties = new Properties();
-            String contents = FileCopyUtils.copyToString(new InputStreamReader(inputStream, "UTF-8"));
+            String contents = FileCopyUtils.copyToString(reader);
             // Replace backslashes with double backslashes to escape windows path separator.
             // Example input: schemaspy.o=C:\tools\schemaspy\output
             properties.load(new StringReader(contents.replace("\\", "\\\\")));
             return properties;
         } catch (IOException e) {
-            LOGGER.log(Level.SEVERE, "File not found: " + path, e);
+            LOGGER.error("File not found: {}", path, e);
             throw new IllegalArgumentException("Could not find or load properties file: " + path, e);
         }
     }
 
     @Override
     public String getDefaultValueFor(String optionName) {
+        if (booleans.contains(optionName)) {
+            String value = properties.getProperty(optionName, Boolean.FALSE.toString());
+            return value.isEmpty() ? Boolean.TRUE.toString() : value;
+        }
         return properties.getProperty(optionName);
     }
 }

@@ -18,39 +18,24 @@
  */
 package org.schemaspy.model;
 
-import java.sql.Connection;
+import org.schemaspy.Config;
+import org.schemaspy.model.xml.SchemaMeta;
+import org.schemaspy.util.CaseInsensitiveMap;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import java.lang.invoke.MethodHandles;
 import java.sql.DatabaseMetaData;
-import java.sql.PreparedStatement;
-import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.text.SimpleDateFormat;
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.Collection;
-import java.util.Date;
-import java.util.HashMap;
-import java.util.HashSet;
-import java.util.Iterator;
-import java.util.List;
-import java.util.Map;
-import java.util.Map.Entry;
-import java.util.MissingResourceException;
-import java.util.Set;
-import java.util.StringTokenizer;
-import java.util.logging.Level;
-import java.util.logging.Logger;
+import java.util.*;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
-import org.schemaspy.Config;
-import org.schemaspy.model.xml.SchemaMeta;
-import org.schemaspy.model.xml.TableMeta;
-import org.schemaspy.model.Schema;
-import org.schemaspy.model.Catalog;
-import org.schemaspy.util.CaseInsensitiveMap;
-import org.springframework.context.expression.MapAccessor;
-
 public class Database {
+
+    private static final Logger LOGGER = LoggerFactory.getLogger(MethodHandles.lookup().lookupClass());
+
     private final Config config;
     private final String databaseName ;
     private final Catalog catalog ;
@@ -65,7 +50,6 @@ public class Database {
     private final String connectTime = new SimpleDateFormat("EEE MMM dd HH:mm z yyyy").format(new Date());
     private Set<String> sqlKeywords;
     private Pattern invalidIdentifierPattern;
-    private final Logger logger = Logger.getLogger(getClass().getName());
 	private final ProgressListener listener;
 
     public Database(Config config, DatabaseMetaData meta, String name, String catalog, String schema, SchemaMeta schemaMeta,
@@ -173,10 +157,10 @@ public class Database {
     /**
      * Return an uppercased <code>Set</code> of all SQL keywords used by a database
      *
+     *
      * @return
-     * @throws SQLException
      */
-    public Set<String> getSqlKeywords() throws SQLException {
+    public Set<String> getSqlKeywords() {
         if (sqlKeywords == null) {
             // from http://www.contrib.andrew.cmu.edu/~shadow/sql/sql1992.txt:
             String[] sql92Keywords =
@@ -243,7 +227,13 @@ public class Database {
                 "| YEAR" +
                 "| ZONE").split("[| ]+");
 
-            String[] nonSql92Keywords = getMetaData().getSQLKeywords().toUpperCase().split(",\\s*");
+            String[] nonSql92Keywords = new String[0];
+            try {
+                nonSql92Keywords = getMetaData().getSQLKeywords().toUpperCase().split(",\\s*");
+            } catch (SQLException sqle) {
+                LOGGER.warn("Failed to retrieve SQLKeywords from metadata, using only SQL92 keywords");
+                LOGGER.debug("Failed to retrieve SQLKeywords from metadata, using only SQL92 keywords", sqle);
+            }
 
             sqlKeywords = new HashSet<String>() {
                 private static final long serialVersionUID = 1L;
@@ -275,12 +265,16 @@ public class Database {
 
         if (quotesRequired) {
             // name contains something that must be quoted
-            String quote = getMetaData().getIdentifierQuoteString().trim();
-            return quote + id + quote;
+            return quoteIdentifier(id);
         }
 
         // no quoting necessary
         return id;
+    }
+
+    public String quoteIdentifier(String id) throws SQLException {
+        String quote = getMetaData().getIdentifierQuoteString().trim();
+        return quote + id + quote;
     }
 
     /**
@@ -290,14 +284,14 @@ public class Database {
      */
     private Pattern getInvalidIdentifierPattern() throws SQLException {
         if (invalidIdentifierPattern == null) {
-            String validChars = "a-zA-Z0-9_";
+            StringBuilder validChars = new StringBuilder("a-zA-Z0-9_");
             String reservedRegexChars = "-&^";
             String extraValidChars = getMetaData().getExtraNameCharacters();
             for (int i = 0; i < extraValidChars.length(); ++i) {
                 char ch = extraValidChars.charAt(i);
                 if (reservedRegexChars.indexOf(ch) >= 0)
-                    validChars += "\\";
-                validChars += ch;
+                    validChars.append("" + "\\");
+                validChars.append(ch);
             }
 
             invalidIdentifierPattern = Pattern.compile("[^" + validChars + "]");

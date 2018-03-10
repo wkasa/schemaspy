@@ -36,7 +36,7 @@ public class Markdown {
     }
 
     private static String addReferenceLink(String markdownText, String rootPath) {
-        String text = markdownText;
+        StringBuilder text = new StringBuilder(markdownText);
         String newLine = "\r\n";
 
         Pattern p = Pattern.compile("\\[(.*?)\\]");
@@ -48,8 +48,8 @@ public class Markdown {
             links.add(m.group(1));
         }
 
-        if (links.size() > 0) {
-            text = text + newLine + newLine;
+        if (!links.isEmpty()) {
+            text.append(newLine).append(newLine);
         }
 
         for (String link : links) {
@@ -63,14 +63,12 @@ public class Markdown {
             }
 
             String path = rootPath+pagePath(pageLink);
-            if (path != null) {
-                if (anchorLink != "") {
-                    path = path + "#" + anchorLink;
-                }
-                text = text + "[" +link+ "]: ./" + path + newLine;
-            }
+            if (!anchorLink.equals("")) {
+				path = path + "#" + anchorLink;
+			}
+            text.append("[").append(link).append("]: ./").append(path).append(newLine);
         }
 
-        return text;
+        return text.toString();
     }
 }

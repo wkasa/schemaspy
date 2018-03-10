@@ -36,27 +36,19 @@ import java.io.Writer;
 public class LineWriter extends BufferedWriter {
     private final Writer out;
 
-    public LineWriter(String filename, String charset) throws UnsupportedEncodingException, FileNotFoundException {
-        this(new FileOutputStream(filename), charset);
-    }
-
-    public LineWriter(String filename, int sz, String charset) throws UnsupportedEncodingException, FileNotFoundException {
-        this(new FileOutputStream(filename), sz, charset);
-    }
-
     public LineWriter(File file, String charset) throws UnsupportedEncodingException, FileNotFoundException {
         this(new FileOutputStream(file), charset);
     }
 
-    public LineWriter(File file, int sz, String charset) throws UnsupportedEncodingException, IOException {
+    public LineWriter(File file, int sz, String charset) throws IOException {
         this(new FileOutputStream(file), sz, charset);
     }
 
-    public LineWriter(OutputStream out, String charset) throws UnsupportedEncodingException {
+    private LineWriter(OutputStream out, String charset) throws UnsupportedEncodingException {
         this(new OutputStreamWriter(out, charset), 8192);
     }
 
-    public LineWriter(OutputStream out, int sz, String charset) throws UnsupportedEncodingException {
+    private LineWriter(OutputStream out, int sz, String charset) throws UnsupportedEncodingException {
         this(new OutputStreamWriter(out, charset), sz);
     }
 

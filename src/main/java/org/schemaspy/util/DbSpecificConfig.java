@@ -1,6 +1,8 @@
 /*
+ * Copyright (C) 2004-2010 John Currier
+ * Copyright (C) 2017 Nils Petzaell
+ *
  * This file is a part of the SchemaSpy project (http://schemaspy.org).
- * Copyright (C) 2004, 2005, 2006, 2007, 2008, 2009, 2010 John Currier
  *
  * SchemaSpy is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
@@ -18,20 +20,25 @@
  */
 package org.schemaspy.util;
 
-import java.io.File;
-import java.io.IOException;
+import org.schemaspy.Config;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import java.lang.invoke.MethodHandles;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Properties;
 import java.util.StringTokenizer;
-import org.schemaspy.Config;
 
 /**
  * Configuration of a specific type of database (as specified by -t)
  *
  * @author John Currier
+ * @author Nils Petzaell
  */
 public class DbSpecificConfig {
+
+    private static final Logger LOGGER = LoggerFactory.getLogger(MethodHandles.lookup().lookupClass());
 
     private final String type;
     private String description;
@@ -45,14 +52,15 @@ public class DbSpecificConfig {
      */
     public DbSpecificConfig(String dbType) {
         type = dbType;
-        Properties props;
-        try {
-            props = config.determineDbProperties(dbType);
-            description = props.getProperty("description");
-            loadOptions(props);
-        } catch (IOException exc) {
-            description = exc.toString();
-        }
+        Properties props = config.determineDbProperties(dbType);
+        description = props.getProperty("description");
+        loadOptions(props);
+    }
+
+    public DbSpecificConfig(String dbType, Properties props) {
+        type = dbType;
+        description = props.getProperty("description");
+        loadOptions(props);
     }
 
     /**
@@ -102,12 +110,17 @@ public class DbSpecificConfig {
      * Dump usage details associated with the associated type of database
      */
     public void dumpUsage() {
-        System.out.println(" " + new File(type).getName() + ":");
-        System.out.println("  " + description);
-
-        for (DbSpecificOption option : getOptions()) {
-            System.out.println("   -" + option.getName() + " " + (option.getDescription() != null ? "  \t" + option.getDescription() : ""));
-        }
+        LOGGER.info(description);
+        getOptions().stream().map(option ->
+                        "   -" +
+                        option.getName() +
+                        " " +
+                        (
+                                option.getDescription() != null ?
+                                "  \t\t" + option.getDescription() :
+                                ""
+                        )
+                ).forEach(LOGGER::info);
     }
 
     /**

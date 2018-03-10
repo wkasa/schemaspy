@@ -1,25 +1,31 @@
 package org.schemaspy.util;
 
 import org.schemaspy.view.MustacheTableDiagram;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.io.BufferedReader;
 import java.io.File;
 import java.io.IOException;
 import java.io.StringReader;
+import java.lang.invoke.MethodHandles;
+import java.nio.file.Files;
 import java.util.List;
 
 /**
  * Created by rkasa on 2016-04-16.
  */
 public class DiagramUtil {
+    private static final Logger LOGGER = LoggerFactory.getLogger(MethodHandles.lookup().lookupClass());
 
-    public static void generateDiagram(String diagramName, Dot dot, File dotFile, File diagramFile, List<MustacheTableDiagram> diagrams, boolean isActive, boolean isImplied) throws Dot.DotFailure {
+    public static void generateDiagram(String diagramName, Dot dot, File dotFile, File diagramFile, List<MustacheTableDiagram> diagrams, boolean isActive, boolean isImplied) throws IOException {
         if (dotFile.exists()) {
             String mapDegreesDotFile = dot.generateDiagram(dotFile, diagramFile);
             createDiagram(diagramName, diagramFile, mapDegreesDotFile, diagrams, isActive, isImplied);
         } else {
-            dotFile.delete();
-            diagramFile.delete();
+            Files.deleteIfExists(dotFile.toPath());
+            Files.deleteIfExists(diagramFile.toPath());
+
         }
     }
 
@@ -34,7 +40,6 @@ public class DiagramUtil {
         diagram.setMapName(diagramMapName(diagramMap));
         diagram.setIsImplied(isImplied);
         diagrams.add(diagram);
-        diagramMap = null;
     }
 
     private static String diagramMapName(String diagramMap) {
@@ -47,21 +52,21 @@ public class DiagramUtil {
                 diagramMapName = line.substring(9,line.indexOf("name")-2);
             }
         } catch (IOException e) {
-            e.printStackTrace();
+            LOGGER.error("Error reading diagram map",e);
         }
         return diagramMapName;
     }
 
     public static Object diagramExists(List<MustacheTableDiagram> diagrams) {
         Object exists = null;
-        if  (diagrams.size() > 0) {
+        if  (!diagrams.isEmpty()) {
             exists = new Object();
         }
         return exists;
     }
 
     public static void markFirstAsActive(List<MustacheTableDiagram> diagrams) {
-        if (diagrams != null && diagrams.size() > 0) {
+        if (diagrams != null && !diagrams.isEmpty()) {
             MustacheTableDiagram diagram = diagrams.get(0);
             if (diagram != null) {
                 diagram.setActive(true);

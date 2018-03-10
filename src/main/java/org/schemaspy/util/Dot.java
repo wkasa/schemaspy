@@ -18,14 +18,19 @@
  */
 package org.schemaspy.util;
 
+import org.apache.commons.io.FileUtils;
+import org.apache.commons.io.IOUtils;
 import org.schemaspy.Config;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.io.*;
+import java.lang.invoke.MethodHandles;
 import java.util.Collections;
 import java.util.HashSet;
 import java.util.Set;
-import java.util.logging.Level;
-import java.util.logging.Logger;
+
+
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -40,7 +45,8 @@ public class Dot {
     private String renderer;
     private final Set<String> validatedRenderers = Collections.synchronizedSet(new HashSet<String>());
     private final Set<String> invalidatedRenderers = Collections.synchronizedSet(new HashSet<String>());
-    private final Logger logger = Logger.getLogger(Dot.class.getName());
+
+    private final Logger LOGGER = LoggerFactory.getLogger(MethodHandles.lookup().lookupClass());
 
     private static final String CAIRO_RENDERER = ":cairo";
     private static final String GD_RENDERER = ":gd";
@@ -58,7 +64,7 @@ public class Dot {
             Process process = Runtime.getRuntime().exec(dotCommand);
             BufferedReader reader = new BufferedReader(new InputStreamReader(process.getErrorStream()));
             String versionLine = reader.readLine();
-            logger.config("GraphvizVersion: \"" + versionLine + "\"");
+            LOGGER.trace("GraphvizVersion: \"{}\"", versionLine);
 
             // look for a number followed numbers or dots
             Matcher matcher = Pattern.compile("[0-9]+\\.[0-9]+[^\\.]").matcher(versionLine);
@@ -67,18 +73,17 @@ public class Dot {
             } else {
                 if (Config.getInstance().isHtmlGenerationEnabled()) {
                     System.err.println();
-                    logger.warning("Invalid dot configuration detected.  '" +
-                            getDisplayableCommand(dotCommand) + "' returned:");
-                    logger.warning("   " + versionLine);
+                    LOGGER.warn("Invalid dot configuration detected.  '{}' returned:", getDisplayableCommand(dotCommand));
+                    LOGGER.warn("   {}", versionLine);
                 }
             }
         } catch (Exception validDotDoesntExist) {
             if (Config.getInstance().isHtmlGenerationEnabled()) {
                 System.err.println();
-                logger.warning("Failed to query Graphviz graphvizVersion information");
-                logger.warning("  with: " + getDisplayableCommand(dotCommand));
-                logger.warning("  " + validDotDoesntExist);
-                logger.log(Level.INFO, "Graphviz query failure details:", validDotDoesntExist);
+                LOGGER.warn("Failed to query Graphviz graphvizVersion information");
+                LOGGER.warn("  with: {}", getDisplayableCommand(dotCommand));
+                LOGGER.warn("  {}", validDotDoesntExist);
+                LOGGER.info("Graphviz query failure details:", validDotDoesntExist);
             }
         }
 
@@ -155,7 +160,7 @@ public class Dot {
      */
     public void setRenderer(String renderer) {
         if (isValid() && !supportsRenderer(renderer)) {
-            logger.info("renderer '" + renderer + "' is not supported by your graphvizVersion of dot");
+            LOGGER.info("renderer '{}' is not supported by your graphvizVersion of dot", renderer);
         }
 
         this.renderer = renderer;
@@ -194,7 +199,7 @@ public class Dot {
      * @see #setHighQuality(boolean)
      */
     public boolean isHighQuality() {
-        return getRenderer().indexOf(CAIRO_RENDERER) != -1;
+        return getRenderer().contains(CAIRO_RENDERER);
     }
 
     /**
@@ -229,11 +234,11 @@ public class Dot {
             }
             process.waitFor();
         } catch (Exception exc) {
-            exc.printStackTrace();
+            LOGGER.error("Error determining if a renderer is supported",exc);
         }
 
         if (!validatedRenderers.contains(renderer)) {
-            logger.info("Failed to validate " + getFormat() + " renderer '" + renderer + "'.  Reverting to default renderer for " + getFormat() + '.');
+            LOGGER.info("Failed to validate {} renderer '{}'.  Reverting to default renderer for {}" + '.', getFormat(), renderer, getFormat());
             invalidatedRenderers.add(renderer);
             return false;
         }
@@ -280,7 +285,7 @@ public class Dot {
         };
         // this one is for display purposes ONLY.
         String commandLine = getDisplayableCommand(dotCommand);
-        logger.fine(commandLine);
+        LOGGER.debug(commandLine);
 
         try {
             Process process = Runtime.getRuntime().exec(dotCommand);
@@ -302,18 +307,13 @@ public class Dot {
         } catch (InterruptedException interrupted) {
             throw new RuntimeException(interrupted);
         } catch (DotFailure failed) {
-            diagramFile.delete();
+            FileUtils.deleteQuietly(diagramFile);
             throw failed;
         } catch (IOException failed) {
-            diagramFile.delete();
+            FileUtils.deleteQuietly(diagramFile);
             throw new DotFailure("'" + commandLine + "' failed with exception " + failed);
         } finally {
-            if (mapReader != null) {
-                try {
-                    mapReader.close();
-                } catch (IOException ignore) {
-                }
-            }
+            IOUtils.closeQuietly(mapReader);
         }
     }
 
@@ -336,6 +336,7 @@ public class Dot {
     }
 
     private static class ProcessOutputReader extends Thread {
+		private final Logger LOGGER = LoggerFactory.getLogger(MethodHandles.lookup().lookupClass());
         private final BufferedReader processReader;
         private final String command;
 
@@ -351,17 +352,13 @@ public class Dot {
                 String line;
                 while ((line = processReader.readLine()) != null) {
                     // don't report port id unrecognized or unrecognized port
-                    if (line.indexOf("unrecognized") == -1 && line.indexOf("port") == -1)
+                    if (!line.contains("unrecognized") && !line.contains("port"))
                         System.err.println(command + ": " + line);
                 }
             } catch (IOException ioException) {
-                ioException.printStackTrace();
+                LOGGER.error("Error reading from process",ioException);
             } finally {
-                try {
-                    processReader.close();
-                } catch (Exception exc) {
-                    exc.printStackTrace(); // shouldn't ever get here...but...
-                }
+                IOUtils.closeQuietly(processReader);
             }
         }
     }

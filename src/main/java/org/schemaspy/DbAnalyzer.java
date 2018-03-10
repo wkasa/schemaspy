@@ -18,19 +18,21 @@
  */
 package org.schemaspy;
 
+import java.lang.invoke.MethodHandles;
 import java.sql.DatabaseMetaData;
 import java.sql.ResultSet;
 import java.sql.ResultSetMetaData;
 import java.sql.SQLException;
 import java.util.*;
-import java.util.logging.Level;
-import java.util.logging.Logger;
 import java.util.regex.Pattern;
 
 import org.schemaspy.model.*;
 import org.schemaspy.util.Inflection;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 public class DbAnalyzer {
+    private static final Logger LOGGER = LoggerFactory.getLogger(MethodHandles.lookup().lookupClass());
 	
     public static List<ImpliedForeignKeyConstraint> getImpliedConstraints(Collection<Table> tables) {
         List<TableColumn> columnsWithoutParents = new ArrayList<TableColumn>();
@@ -39,7 +41,7 @@ public class DbAnalyzer {
         // gather all the primary key columns and columns without parents
         for (Table table : tables) {
             List<TableColumn> tablePrimaries = table.getPrimaryColumns();
-            if (tablePrimaries.size() == 1 || tablePrimaries.stream().filter(t-> t.getName().equals("LanguageId")).count() > 0) { // can't match up multiples...yet...
+            if (tablePrimaries.size() == 1 || tablePrimaries.stream().anyMatch(t -> t.getName().equals("LanguageId"))) { // can't match up multiples...yet...
             	TableColumn tableColumn = tablePrimaries.get(0);
                 DatabaseObject primary = new DatabaseObject(tableColumn);
                 if (tableColumn.allowsImpliedChildren()) {
@@ -56,7 +58,6 @@ public class DbAnalyzer {
         }
 
         sortColumnsByTable(columnsWithoutParents);
-        Set<DatabaseObject> primaryColumns = keyedTablesByPrimary.keySet();
         List<ImpliedForeignKeyConstraint> impliedConstraints = new ArrayList<ImpliedForeignKeyConstraint>();
         
         for (TableColumn childColumn : columnsWithoutParents) {
@@ -69,10 +70,10 @@ public class DbAnalyzer {
 				DatabaseObject key = entry.getKey();
 				if (columnWithoutParent.getName().compareToIgnoreCase(key.getName()) == 0
 						// if adress_id=adress_id OR shipping_adress_id like &description%_adress_id
-						|| columnWithoutParent.getName().matches("(?i).*_" + key.getName())
+						|| columnWithoutParent.getName().matches("(?i).*_" + Pattern.quote(key.getName()))
 						// if order.adressid=>adress.id. find FKs that made from %parentTablename%PKcol%
 						// if order.adress_id=>adress.id. find FKs that made from %tablename%_%PKcol%
-						|| columnWithoutParent.getName().matches("(?i)" +entry.getValue().getName() + ".*" + key.getName()) 
+						|| columnWithoutParent.getName().matches("(?i)" + Pattern.quote(entry.getValue().getName()) + ".*" + Pattern.quote(key.getName()))
 						) {
 					// check f columnTypes Or ColumnTypeNames are same.
 					if ((columnWithoutParent.getType() != null && key.getType() != null
@@ -193,7 +194,7 @@ public class DbAnalyzer {
         List<Table> withoutIndexes = new ArrayList<Table>();
 
         for (Table table : tables) {
-            if (table.getIndexes().size() == 0 && !table.isView() && !table.isLogical())
+            if (table.getIndexes().isEmpty() && !table.isView() && !table.isLogical())
                 withoutIndexes.add(table);
         }
 
@@ -256,25 +257,17 @@ public class DbAnalyzer {
     }
 
     public static List<Table> sortTablesByName(List<Table> tables) {
-        Collections.sort(tables, new Comparator<Table>() {
-            @Override
-			public int compare(Table table1, Table table2) {
-                return table1.compareTo(table2);
-            }
-        });
+        tables.sort(Table::compareTo);
 
         return tables;
     }
 
     public static List<TableColumn> sortColumnsByTable(List<TableColumn> columns) {
-        Collections.sort(columns, new Comparator<TableColumn>() {
-            @Override
-			public int compare(TableColumn column1, TableColumn column2) {
-                int rc = column1.getTable().compareTo(column2.getTable());
-                if (rc == 0)
-                    rc = column1.getName().compareToIgnoreCase(column2.getName());
-                return rc;
-            }
+        columns.sort((column1, column2) -> {
+            int rc = column1.getTable().compareTo(column2.getTable());
+            if (rc == 0)
+                rc = column1.getName().compareToIgnoreCase(column2.getName());
+            return rc;
         });
 
         return columns;
@@ -357,8 +350,6 @@ public class DbAnalyzer {
     public static List<String> getPopulatedSchemas(DatabaseMetaData meta, String schemaSpec, boolean isCatalog) throws SQLException {
         Set<String> schemas = new TreeSet<String>(); // alpha sorted
         Pattern schemaRegex = Pattern.compile(schemaSpec);
-        Logger logger = Logger.getLogger(DbAnalyzer.class.getName());
-        boolean logging = logger.isLoggable(Level.FINE);
 
         for (String schema : (isCatalog ? getCatalogs(meta) : getSchemas(meta))) {
             if (schemaRegex.matcher(schema).matches()) {
@@ -366,14 +357,10 @@ public class DbAnalyzer {
                 try {
                     rs = meta.getTables(null, schema, "%", null);
                     if (rs.next()) {
-                        if (logging)
-                            logger.fine("Including schema " + schema +
-                                        ": matches + \"" + schemaRegex + "\" and contains tables");
+                        LOGGER.debug("Including schema {}: matches + \"{}\" and contains tables", schema, schemaRegex);
                         schemas.add(schema);
                     } else {
-                        if (logging)
-                            logger.fine("Excluding schema " + schema +
-                                        ": matches \"" + schemaRegex + "\" but contains no tables");
+                        LOGGER.debug("Excluding schema {}: matches \"{}\" but contains no tables", schema, schemaRegex);
                     }
                 } catch (SQLException ignore) {
                 } finally {
@@ -381,9 +368,7 @@ public class DbAnalyzer {
                         rs.close();
                 }
             } else {
-                if (logging)
-                    logger.fine("Excluding schema " + schema +
-                                ": doesn't match \"" + schemaRegex + '"');
+                LOGGER.debug("Excluding schema {}: doesn't match \"{}" + '"', schema, schemaRegex);
             }
         }
 
